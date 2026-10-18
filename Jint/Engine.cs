@@ -1885,6 +1885,9 @@ public sealed partial class Engine : IDisposable
     }
 
     internal T ExecuteWithConstraints<T>(bool strict, Func<T> callback)
+        => ExecuteWithConstraints(strict, callback, static action => action());
+
+    private T ExecuteWithConstraints<T, TState>(bool strict, TState state, Func<TState, T> callback)
     {
         // A nested call — a host callback inside a running script calling back into the engine —
         // must not re-arm the outer run's constraints: the outer budget (time/statements) keeps
@@ -1910,7 +1913,7 @@ public sealed partial class Engine : IDisposable
         var previousStrict = strict && ReplaceTopStrict(true);
         try
         {
-            return callback();
+            return callback(state);
         }
         finally
         {
@@ -2819,18 +2822,19 @@ public sealed partial class Engine : IDisposable
     /// <returns>The value returned by the call.</returns>
     public JsValue Call(JsValue callable, JsValue thisObject, JsCallArguments arguments)
     {
-        JsValue Callback()
+        return ExecuteWithConstraints(Options.Strict, new CallState(this, callable, thisObject, arguments), static state =>
         {
-            if (!callable.IsCallable)
+            if (!state.Callable.IsCallable)
             {
-                Throw.ArgumentException($"{callable.Type} is not callable");
+                Throw.ArgumentException($"{state.Callable.Type} is not callable");
             }
 
-            return Call((ICallable) callable, thisObject, arguments, null);
-        }
-
-        return ExecuteWithConstraints(Options.Strict, Callback);
+            return state.Engine.Call((ICallable) state.Callable, state.ThisObject, state.Arguments, null);
+        });
     }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Auto)]
+    private readonly record struct CallState(Engine Engine, JsValue Callable, JsValue ThisObject, JsCallArguments Arguments);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal JsValue Call(ICallable callable, JsValue thisObject, JsCallArguments arguments, JintExpression? expression)
